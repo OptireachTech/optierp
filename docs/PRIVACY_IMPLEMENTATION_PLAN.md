@@ -33,7 +33,7 @@ depends on team capacity, which this plan doesn't guess at.
 | Phase | Deliverable | Definition of done | Automated guard | Effort |
 |---|---|---|---|---|
 | Foundation ✅ | CI pipeline | every PR runs lint + full test suite; merge blocked on red | `.github/workflows/ci.yml` | S |
-| 0 ✅ | Isolation & session integrity | all 47 gap tables carry a policy + `FORCE RLS` (148 tables total now forced); refresh tokens revocable; `/auth/login`+`/auth/refresh` rate-limited | `test_rls_coverage.py` | M |
+| 0 ✅ | Isolation & session integrity | all 22 gap tables carry a policy + `FORCE RLS` (148 tables total now forced); refresh tokens revocable; `/auth/login`+`/auth/refresh` rate-limited | `test_rls_coverage.py` | M |
 | 1 | Classification & field-level RBAC | every field touching known-sensitive data carries a tier; `can_read_pii`/`can_read_restricted` enforced; audit snapshot redacted | `test_sensitivity_coverage.py`, `test_audit_redaction.py` | M |
 | 2 | Document storage | `Document` model generalized off `SecretarialFile`; bytes in object storage; view/download/export are separate permissions | manual review — no automated guard for storage-migration correctness | L |
 | 3 | OCR/AI pipeline on stored documents | upload → store → extract → review → evidence-linked; Tier-3 document types refuse at the gateway, not a flag | `test_ai_call_sites.py` | M |
@@ -47,9 +47,10 @@ depends on team capacity, which this plan doesn't guess at.
 **Changed:**
 
 - `.github/workflows/ci.yml` — new. Postgres + Redis services, migration apply, `ruff check`, full `pytest`.
-- `backend/migrations/versions/0103_rls_coverage.py` — new. `company_isolation` policy on the 47
-  gap tables (found by re-scanning, not the original estimate of 59 — see
-  `docs/DATA_PRIVACY_ARCHITECTURE.md` §2); `FORCE ROW LEVEL SECURITY` on all 148.
+- `backend/migrations/versions/0103_rls_coverage.py` — new. `company_isolation` policy on the 22
+  gap tables (re-scanned down from an original estimate of 59, then a first-pass migration of 47 —
+  see the correction note below and `docs/DATA_PRIVACY_ARCHITECTURE.md` §2); `FORCE ROW LEVEL
+  SECURITY` on all 148.
 - `backend/migrations/versions/0104_refresh_tokens.py` — new. `refresh_tokens` table.
 - `backend/app/models/core.py` — new `RefreshToken` model.
 - `backend/app/services/auth_sessions.py` — new. Issue/rotate/revoke refresh tokens; reuse detection.
@@ -70,6 +71,21 @@ new RLS-coverage assertions. `ruff check` — clean. The 4 new integration tests
 environment (no local Postgres/Redis) and need the CI run above, or a local
 `docker compose up -d postgres redis`, to actually execute — see the architecture doc's residual-gap
 note in §2 for what they do and don't prove.
+
+**Correction, found by the first real CI run:** the PR opened for this work failed migration
+`0103` with `DuplicateObjectError: policy "company_isolation" for table "cm_cost_rates" already
+exists`. Root cause: the coverage scan (and the guard test built on it) only recognised two of the
+three ways this codebase grants RLS — a literal `op.execute` and the `for table in (...):` loop —
+and missed a third: several migrations (the tax module and contribution-margin planning,
+specifically) define their own `_rls(table)` or `_enable_rls(table)` helper function and call it
+per table instead of inlining `op.execute`. 25 of the original 47 "gap" tables already had a
+policy through one of those helpers; the migration tried to create a second `company_isolation`
+policy on each and Postgres correctly refused. Fix: `test_rls_coverage.py` now detects any
+file-local single-argument function whose body issues an ENABLE/FORCE statement, and treats a
+literal-argument call to it the same as a direct statement. Re-scanning with that fixed found the
+real gap: 22 tables, not 47. `0103_rls_coverage.py` was rewritten with the corrected lists — see
+its own docstring for the full account. This is exactly the failure mode CI exists to catch before
+merge, not after a manual review; it did.
 
 **Known limitation carried forward, not fixed here:** the integration test fixture builds its schema
 via `Base.metadata.create_all`, which doesn't run Alembic's `CREATE POLICY` SQL — so RLS enforcement

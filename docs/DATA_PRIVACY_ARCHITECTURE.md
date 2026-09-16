@@ -41,18 +41,28 @@ None of the access-control design matters if the tenant boundary under it leaks.
   new transaction (`backend/app/core/database.py`); RLS policies read it. Design is sound.
 - **Coverage was not.** A precise scan (every `CompanyScopedMixin` model cross-referenced against
   every migration's `ENABLE ROW LEVEL SECURITY` statement — the same check `test_rls_coverage.py`
-  now runs on every PR) found 148 company-scoped tables, 104 with a `company_isolation` policy and
-  **47 with none**, relying on application-layer `WHERE company_id = …` alone — including
-  `bank_transactions`, `shareholders`, `share_transfers`, `assets`, and the whole tax
-  computation/filing table set.
+  now runs on every PR) found 148 company-scoped tables, 126 with a `company_isolation` policy and
+  **22 with none**, relying on application-layer `WHERE company_id = …` alone — including
+  `bank_transactions`, `shareholders`, `share_transfers`, `assets` and `subscriptions`.
+  (First pass at this scan mis-flagged 25 more as gaps — see the correction note below.)
 - `FORCE ROW LEVEL SECURITY` was **never set, anywhere**. Any session running as `erp_owner`
   (migrations, a script, a pooler misconfiguration) bypassed RLS silently, on *every* table —
-  not just the 47.
+  not just the 22.
 
-Fixed: `company_isolation` policy on the 47 gap tables, `FORCE ROW LEVEL SECURITY` on all 148, and
+Fixed: `company_isolation` policy on the 22 gap tables, `FORCE ROW LEVEL SECURITY` on all 148, and
 `backend/tests/unit/test_rls_coverage.py` — an introspection-only CI guard, same idiom as
 `test_descriptor_drift.py` — failing the build when a `CompanyScopedMixin` model gains no matching
 migration policy from here on.
+
+**Correction (caught by CI, not by review):** the migration's first version put 47 tables in its
+gap list. Deploying it failed in CI with `DuplicateObjectError: policy "company_isolation" for
+table "cm_cost_rates" already exists` — 25 of the 47 already had a policy. Several migrations
+(mostly the tax and contribution-margin modules) grant RLS through a locally-defined
+`_rls(table)` or `_enable_rls(table)` helper function instead of inlining `op.execute` — a third
+idiom the original scan didn't recognise, alongside the literal and loop forms it did. Re-scanning
+with that idiom added found the true count: 22, not 47. `test_rls_coverage.py` now recognises all
+three call shapes, so this exact class of false positive fails the guard test before a migration
+is even written, rather than surfacing as a runtime `DuplicateObjectError` in CI.
 
 Known residual gap (not closed by this migration): the integration test suite builds its schema
 via `Base.metadata.create_all` (`tests/integration/conftest.py`), which does not run Alembic's raw
@@ -272,7 +282,7 @@ the application filter. (Closed — see §2.)
 
 | File / model | Change |
 |---|---|
-| `migrations/versions/0103_rls_coverage.py`, `0104_refresh_tokens.py` | ✅ shipped (Phase 0) — `company_isolation` policy + `FORCE ROW LEVEL SECURITY` on the 47 gap tables; `FORCE` added to the 104 tables that already had a policy (101 `CompanyScopedMixin`, plus 3 non-tenant-scoped tables — `secretarial_engagements` and two reference tables — that already carried their own); new `refresh_tokens` table |
+| `migrations/versions/0103_rls_coverage.py`, `0104_refresh_tokens.py` | ✅ shipped (Phase 0) — `company_isolation` policy + `FORCE ROW LEVEL SECURITY` on the 22 gap tables; `FORCE` added to the 133 tables that already had a policy (126 `CompanyScopedMixin`, plus 7 non-tenant-scoped tables — `secretarial_engagements` and six reference tables — that already carried their own); new `refresh_tokens` table |
 | `app/registry/base.py` — `FieldSpec` | add `sensitivity: str` (no default — see implementation plan §3) |
 | `app/models/core.py` — `RolePermission` | add `can_read_pii`, `can_read_restricted` booleans |
 | `app/services/audit.py` | add `redact_for_audit()` beside `serialize_document()`; add `log_read()` for Tier-3 access |

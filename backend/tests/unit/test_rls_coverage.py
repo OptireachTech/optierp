@@ -7,15 +7,19 @@ gets a ``company_isolation`` row-level-security policy, with
 as good as this test: RLS policies are raw SQL inside Alembic migrations, not
 part of SQLAlchemy's metadata, so nothing about a missing policy shows up from
 introspecting the ORM alone — a model can gain ``CompanyScopedMixin`` and the
-migration author can simply forget the policy, exactly what happened to the 47
+migration author can simply forget the policy, exactly what happened to the 22
 tables closed by migration 0103_rls_coverage.
 
 Runs without a database: it statically scans every migration file for the
-``ENABLE``/``FORCE ROW LEVEL SECURITY`` statements (literal and the
-``for table in (...): op.execute(f"...")`` loop form every migration in this
-repo uses) and compares the covered set against every model that mixes in
-``CompanyScopedMixin``. Same introspection-only idiom as
-``test_descriptor_drift.py``.
+``ENABLE``/``FORCE ROW LEVEL SECURITY`` statements — literal calls, the
+``for table in (...): op.execute(f"...")`` loop form, and a locally-defined
+one-table-argument helper (several migrations write their own ``_rls(table)``
+or ``_enable_rls(table)`` instead of inlining ``op.execute`` — the exact
+mismatch between this scanner's first version and that third idiom is what
+let migration 0103 try to re-create policies that already existed via one of
+these helpers and fail in CI; see its commit history) — and compares the
+covered set against every model that mixes in ``CompanyScopedMixin``. Same
+introspection-only idiom as ``test_descriptor_drift.py``.
 """
 
 import ast
@@ -75,6 +79,29 @@ def _canonicalise(tables: set[str]) -> set[str]:
     return {RENAMED_TABLES.get(t, t) for t in tables}
 
 
+def _local_rls_helpers(tree: ast.Module, src: str) -> dict[str, set[str]]:
+    """Find file-local ``def helper(table): op.execute(f"...ENABLE/FORCE...")`` functions.
+
+    Returns {function_name: {"ENABLE", "FORCE"} subset} for every single-argument
+    function whose body issues an ``op.execute`` naming ROW LEVEL SECURITY using
+    that argument — the ``_rls``/``_enable_rls`` idiom several migrations use
+    instead of inlining ``op.execute`` directly.
+    """
+    helpers: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and len(node.args.args) == 1):
+            continue
+        body_src = ast.get_source_segment(src, node) or ""
+        kinds = set()
+        if "ENABLE ROW LEVEL SECURITY" in body_src:
+            kinds.add("ENABLE")
+        if "FORCE ROW LEVEL SECURITY" in body_src:
+            kinds.add("FORCE")
+        if kinds:
+            helpers[node.name] = kinds
+    return helpers
+
+
 def _scan_migrations() -> tuple[set[str], set[str]]:
     """Return (tables with ENABLE ROW LEVEL SECURITY, tables with FORCE ROW LEVEL SECURITY)."""
     import re
@@ -84,7 +111,8 @@ def _scan_migrations() -> tuple[set[str], set[str]]:
     statement_re = re.compile(r"ALTER TABLE (\w+) (ENABLE|FORCE) ROW LEVEL SECURITY")
 
     for path in sorted(MIGRATIONS_DIR.glob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        src = path.read_text(encoding="utf-8")
+        tree = ast.parse(src, filename=str(path))
 
         # Module-level tuple/list-of-strings constants, e.g. RLS_TABLES = (...) or
         # GAP_TABLES: tuple[str, ...] = (...) — both plain and annotated assignments.
@@ -103,6 +131,8 @@ def _scan_migrations() -> tuple[set[str], set[str]]:
                 for target in targets:
                     if isinstance(target, ast.Name):
                         consts[target.id] = vals
+
+        helpers = _local_rls_helpers(tree, src)
 
         for node in ast.walk(tree):
             if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
@@ -125,6 +155,14 @@ def _scan_migrations() -> tuple[set[str], set[str]]:
                 m = statement_re.match(text) if text else None
                 if m:
                     table, kind = m.group(1), m.group(2)
+                    (enabled if kind == "ENABLE" else forced).add(table)
+
+            # A call to one of this file's local RLS helpers with a literal table name.
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in helpers and node.args
+                    and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+                table = node.args[0].value
+                for kind in helpers[node.func.id]:
                     (enabled if kind == "ENABLE" else forced).add(table)
 
     return _canonicalise(enabled), _canonicalise(forced)

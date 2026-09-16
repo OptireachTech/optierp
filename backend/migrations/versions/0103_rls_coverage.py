@@ -2,17 +2,17 @@
 
 ``CompanyScopedMixin``'s own docstring (``app/models/base.py``) promises every
 tenant-owned table gets a ``company_isolation`` RLS policy in its migration.
-That promise had drifted: 47 of 148 ``company_id``-bearing tables were never
-given one, including ``bank_transactions``, ``shareholders``, ``share_transfers``,
-``assets`` and the entire tax computation/filing table set (see
+That promise had drifted: of 148 ``company_id``-bearing tables, 22 were never
+given one — including ``bank_transactions``, ``shareholders``,
+``share_transfers``, ``assets`` and ``subscriptions`` (see
 ``docs/DATA_PRIVACY_ARCHITECTURE.md`` and ``docs/PRIVACY_IMPLEMENTATION_PLAN.md``
 Phase 0). This migration:
 
-  1. Enables RLS + the standard ``company_isolation`` policy on the 47 gap
+  1. Enables RLS + the standard ``company_isolation`` policy on the 22 gap
      tables (``GAP_TABLES``), exactly matching the policy every other scoped
      table already carries (see e.g. migration 0001_core_setup).
-  2. Adds ``FORCE ROW LEVEL SECURITY`` to *every* scoped table — the 47 above
-     plus the 104 that already had ``ENABLE`` but never ``FORCE``
+  2. Adds ``FORCE ROW LEVEL SECURITY`` to *every* scoped table — the 22 above
+     plus the 133 that already had ``ENABLE`` but never ``FORCE``
      (``ALREADY_ENABLED_TABLES``). Without FORCE, RLS does not apply to a
      table's owner; ``erp_owner`` (the Alembic/migration role — see
      ``infra/init-db.sql``) is exactly that owner, so a stray ad-hoc query run
@@ -20,6 +20,19 @@ Phase 0). This migration:
      was reading and writing across every tenant with no isolation at all.
      The application role ``erp_app`` is a non-owner and was already isolated
      by plain ``ENABLE``; FORCE closes the owner-bypass gap specifically.
+
+Correction (see git history on this file): the first version of this
+migration put 47 tables in ``GAP_TABLES``, not 22. Twenty-five of those
+already had a policy — most of the tax/contribution-margin module tables
+grant RLS through a locally-defined ``_rls(table)`` or ``_enable_rls(table)``
+helper function per migration file (e.g. ``migrations/0081_cm_planning.py``,
+``0086_tax_registration.py``) rather than inlining ``op.execute`` directly, a
+third idiom the coverage scan didn't originally recognise. Re-creating a
+policy that already exists is a hard Postgres error
+(``DuplicateObjectError``), which is exactly what happened the first time
+this ran in CI. ``tests/unit/test_rls_coverage.py`` now recognises all three
+idioms (literal, loop, and local helper) so this class of false positive
+fails fast in the guard test instead of at migration time again.
 
 Operational note for future migrations: FORCE RLS means any ``op.execute``
 that INSERTs/UPDATEs a scoped table's rows from *this point forward* runs as
@@ -46,19 +59,21 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 # Tables that already carry ENABLE ROW LEVEL SECURITY + company_isolation from
-# an earlier migration (renamed tables listed under their current name — RLS
-# policies follow a table across ALTER TABLE ... RENAME, per 0102's docstring)
-# and only need FORCE added here.
+# an earlier migration — via a direct op.execute, a for-loop, or a file-local
+# _rls()/_enable_rls() helper (see the module docstring) — and only need
+# FORCE added here. Renamed tables are listed under their current name — RLS
+# policies follow a table across ALTER TABLE ... RENAME, per 0102's docstring.
 ALREADY_ENABLED_TABLES: tuple[str, ...] = (
     "accounts", "addresses", "bank_accounts", "banks", "batches", "bins", "blanket_orders", "budgets",
-    "campaigns", "contacts", "cost_centers", "coupon_codes", "customer_groups", "customers",
-    "delivery_notes", "fiscal_years", "gl_entries", "item_alternatives", "item_groups", "item_prices",
-    "items", "journal_entries", "letter_heads", "material_requests", "migration_imported_documents",
+    "campaigns", "cm_cost_rates", "cm_cost_structures", "cm_plan_variance_runs", "cm_plans", "contacts",
+    "cost_centers", "coupon_codes", "customer_groups", "customers", "delivery_notes", "fiscal_years",
+    "gl_entries", "item_alternatives", "item_groups", "item_prices", "items", "journal_entries",
+    "letter_heads", "mat_credit_ledger", "material_requests", "migration_imported_documents",
     "migration_imports", "migration_mappings", "migration_source_profiles", "modes_of_payment",
-    "monthly_distributions", "naming_series", "payment_entries", "payment_terms",
+    "monthly_distributions", "naming_series", "operations", "payment_entries", "payment_terms",
     "payment_terms_templates", "period_closing_vouchers", "price_lists", "pricing_rules",
     "product_bundles", "promotional_schemes", "purchase_invoices", "purchase_orders", "purchase_receipts",
-    "quotations", "requests_for_quotation", "sales_invoices", "sales_orders", "sales_partners",
+    "quotations", "requests_for_quotation", "routings", "sales_invoices", "sales_orders", "sales_partners",
     "sales_persons", "secretarial_agenda_items", "secretarial_appointments", "secretarial_attendance",
     "secretarial_auditors", "secretarial_beneficial_owners", "secretarial_capital_events",
     "secretarial_charges", "secretarial_circulars", "secretarial_circulation_recipients",
@@ -73,23 +88,22 @@ ALREADY_ENABLED_TABLES: tuple[str, ...] = (
     "secretarial_s186_entries", "secretarial_s186_limits", "secretarial_settings",
     "secretarial_share_certificates", "secretarial_share_transfer_details", "secretarial_status_history",
     "serial_nos", "service_credits", "shipping_rules", "stock_entries", "stock_ledger_entries",
-    "stock_reconciliations", "supplier_groups", "supplier_quotations", "suppliers", "tax_categories",
-    "tax_templates", "terms_templates", "territories", "utm_sources", "warehouses",
+    "stock_reconciliations", "supplier_groups", "supplier_quotations", "suppliers", "tax_26as_recon_runs",
+    "tax_adjustment_provisions", "tax_adjustment_rule_packs", "tax_adjustment_rules", "tax_categories",
+    "tax_challans", "tax_compliance_reminders", "tax_computation_adjustment_lines",
+    "tax_computation_income_lines", "tax_computation_results", "tax_computation_runs", "tax_computations",
+    "tax_credit_entries", "tax_depreciation_blocks", "tax_depreciation_movements",
+    "tax_depreciation_registers", "tax_filings", "tax_loss_carry_forward_ledger",
+    "tax_loss_setoff_entries", "tax_policy_overrides", "tax_regime_elections", "tax_registrations",
+    "tax_templates", "terms_templates", "territories", "utm_sources", "warehouses", "workstations",
 )
 
 # Tables using CompanyScopedMixin that never got a company_isolation policy at all.
 GAP_TABLES: tuple[str, ...] = (
     "advance_gst_adjustments", "asset_categories", "asset_maintenances", "asset_movements", "assets",
-    "bank_transactions", "boms", "cm_cost_rates", "cm_cost_structures", "cm_plan_variance_runs",
-    "cm_plans", "dunning_types", "email_logs", "item_tax_templates", "job_cards", "locations",
-    "mat_credit_ledger", "operations", "payment_requests", "production_plans", "routings",
-    "share_transfers", "share_types", "shareholders", "subcontract_jobs", "subscription_plans",
-    "subscriptions", "tax_26as_recon_runs", "tax_challans", "tax_compliance_reminders",
-    "tax_computation_adjustment_lines", "tax_computation_income_lines", "tax_computation_results",
-    "tax_computation_runs", "tax_computations", "tax_credit_entries", "tax_depreciation_movements",
-    "tax_depreciation_registers", "tax_filings", "tax_loss_carry_forward_ledger",
-    "tax_loss_setoff_entries", "tax_policy_overrides", "tax_regime_elections", "tax_registrations",
-    "tax_withholding_categories", "work_orders", "workstations",
+    "bank_transactions", "boms", "dunning_types", "email_logs", "item_tax_templates", "job_cards",
+    "locations", "payment_requests", "production_plans", "share_transfers", "share_types", "shareholders",
+    "subcontract_jobs", "subscription_plans", "subscriptions", "tax_withholding_categories", "work_orders",
 )
 
 
