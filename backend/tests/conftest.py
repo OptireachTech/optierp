@@ -16,3 +16,8 @@ os.environ.setdefault(
 )
 os.environ.setdefault("SCHEDULER_ENABLED", "false")
 os.environ.setdefault("REFRESH_COOKIE_SECURE", "false")
+# Off by default: a real Redis in CI would otherwise throttle the many
+# unrelated /auth/login calls the ctx fixture makes across the whole
+# integration suite. tests/integration/test_login_rate_limit.py turns it
+# back on for itself only.
+os.environ.setdefault("AUTH_RATE_LIMIT_ENABLED", "false")

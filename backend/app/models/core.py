@@ -160,6 +160,36 @@ class UserRole(Base, DocumentMixin):
     user: Mapped[User] = relationship(back_populates="roles", foreign_keys=[user_id])
 
 
+class RefreshToken(Base):
+    """One row per issued refresh token — lets a stolen-but-unused token be revoked
+    and a replayed, already-rotated token be detected (Section 4.1 / Privacy Phase 0).
+
+    Not ``CompanyScopedMixin``: a refresh token authenticates a user, not a
+    company (the active company is chosen per access-token mint, after login).
+    No ``DocumentMixin`` either — docstatus/owner don't apply to a session
+    artifact, same reasoning as ``AuditLog``.
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
+    creation: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    jti: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, unique=True, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    # "logout" | "rotated" | "reuse_detected" — why this row stopped being valid.
+    revoked_reason: Mapped[str | None] = mapped_column(String(30))
+    # The jti of the token this one was rotated into, when revoked_reason == "rotated".
+    replaced_by_jti: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+
+
 class RolePermission(Base, DocumentMixin):
     """DocType-level permissions, matching ERPNext semantics (Section 4.2).
 

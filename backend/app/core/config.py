@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     # MANUAL_REVIEW: Redis assumed available for realtime + rate limiting.
     redis_url: str = "redis://localhost:6379/0"
 
+    # --- Rate limiting (Privacy Phase 0 — credential-testing surface) ---
+    # Applied to /auth/login and /auth/refresh, keyed by client IP. Fails open
+    # (logs a warning, lets the request through) if Redis is unreachable —
+    # availability over strict enforcement, matching this app's existing
+    # posture toward Redis (see app/core/websocket.py).
+    auth_rate_limit_enabled: bool = True
+    auth_rate_limit_attempts: int = 10
+    auth_rate_limit_window_seconds: int = 60
+
     # --- CORS ---
     allowed_origins: str = "http://localhost:5173"
 

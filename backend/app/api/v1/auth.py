@@ -2,26 +2,20 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.exceptions import PermissionDeniedError
 from app.core.permissions import get_user_roles
-from app.core.security import (
-    CurrentUser,
-    create_access_token,
-    create_refresh_token,
-    decode_token,
-    get_current_user,
-    get_refresh_token_from_cookie,
-)
+from app.core.rate_limit import rate_limit_login, rate_limit_refresh
+from app.core.security import CurrentUser, create_access_token, get_current_user, get_refresh_token_from_cookie
 from app.core.database import get_db
 from app.models.core import User
 from app.schemas.auth import LoginRequest, SwitchCompanyRequest, TokenResponse
 from app.schemas.common import MessageResponse
 from app.schemas.core import UserResponse
-from app.services import user as user_service
+from app.services import auth_sessions, user as user_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -59,13 +53,15 @@ async def _token_response(db: AsyncSession, user: User, company_id) -> TokenResp
     summary="Log in with email and password",
     description="Returns a short-lived access token in the body and sets the "
     "long-lived refresh token as an httpOnly cookie.",
+    dependencies=[Depends(rate_limit_login)],
 )
 async def login(
     payload: LoginRequest, response: Response, db: Annotated[AsyncSession, Depends(get_db)]
 ) -> TokenResponse:
     user = await user_service.authenticate(db, payload.email, payload.password)
     company_id = payload.company_id or user.default_company_id
-    _set_refresh_cookie(response, create_refresh_token(user.id))
+    token = await auth_sessions.issue_refresh_token(db, user.id)
+    _set_refresh_cookie(response, token)
     return await _token_response(db, user, company_id)
 
 
@@ -74,18 +70,18 @@ async def login(
     response_model=TokenResponse,
     summary="Refresh the access token",
     description="Reads the refresh token from the httpOnly cookie, rotates it, "
-    "and returns a fresh access token.",
+    "and returns a fresh access token. Reusing an already-rotated refresh "
+    "token revokes every session for the account.",
+    dependencies=[Depends(rate_limit_refresh)],
 )
 async def refresh(
     response: Response,
     db: Annotated[AsyncSession, Depends(get_db)],
     refresh_token: Annotated[str, Depends(get_refresh_token_from_cookie)],
 ) -> TokenResponse:
-    import uuid as _uuid
-
-    payload = decode_token(refresh_token, "refresh")
-    user = await user_service.get_user(db, _uuid.UUID(payload["sub"]))
-    _set_refresh_cookie(response, create_refresh_token(user.id))
+    new_token, user_id = await auth_sessions.rotate_refresh_token(db, refresh_token)
+    user = await user_service.get_user(db, user_id)
+    _set_refresh_cookie(response, new_token)
     return await _token_response(db, user, user.default_company_id)
 
 
@@ -93,10 +89,16 @@ async def refresh(
     "/logout",
     response_model=MessageResponse,
     summary="Log out",
-    description="Clears the refresh token cookie. Access tokens simply expire (15 min).",
+    description="Revokes the refresh token and clears its cookie. Access tokens "
+    "simply expire (15 min).",
 )
-async def logout(response: Response) -> MessageResponse:
+async def logout(
+    request: Request, response: Response, db: Annotated[AsyncSession, Depends(get_db)]
+) -> MessageResponse:
     settings = get_settings()
+    token = request.cookies.get(settings.refresh_cookie_name)
+    if token:
+        await auth_sessions.revoke_refresh_token(db, token)
     response.delete_cookie(settings.refresh_cookie_name, path="/api/v1/auth")
     return MessageResponse(message="Logged out")
 
@@ -125,6 +127,7 @@ async def me(
 )
 async def switch_company(
     payload: SwitchCompanyRequest,
+    request: Request,
     response: Response,
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -133,5 +136,12 @@ async def switch_company(
     roles = await get_user_roles(db, user.id, payload.company_id)
     if not roles:
         raise PermissionDeniedError("You do not have access to this company")
-    _set_refresh_cookie(response, create_refresh_token(user.id))
+    # Rotate rather than mint alongside: the old refresh token's session is
+    # over from the caller's perspective, and leaving it live would mean two
+    # concurrently valid refresh tokens for what feels like one session.
+    old_token = request.cookies.get(get_settings().refresh_cookie_name)
+    if old_token:
+        await auth_sessions.revoke_refresh_token(db, old_token)
+    new_token = await auth_sessions.issue_refresh_token(db, user.id)
+    _set_refresh_cookie(response, new_token)
     return await _token_response(db, user, payload.company_id)

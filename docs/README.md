@@ -32,6 +32,8 @@ Archived Cursor `.plan.md` briefs → **[`plans/`](plans/README.md)**.
 
 | Doc | Topic |
 |-----|--------|
+| [DATA_PRIVACY_ARCHITECTURE.md](DATA_PRIVACY_ARCHITECTURE.md) | Tenant isolation, data-sensitivity tiers, RBAC/CA-CS delegation, document & OCR/AI governance, machine identity, vendor trust (engineers) |
+| [PRIVACY_IMPLEMENTATION_PLAN.md](PRIVACY_IMPLEMENTATION_PLAN.md) | Execution phases, CI enforcement gates, data-principal-rights workstream, DPDP alignment map |
 | [USP_AND_FUTURE_SCOPE.md](USP_AND_FUTURE_SCOPE.md) | Product differentiators (vision) |
 | [metadata_engine_plan.md](metadata_engine_plan.md) | Metadata / “machine” engine plan |
 | [ENGINE_GUIDE.md](ENGINE_GUIDE.md) | How to use descriptors |

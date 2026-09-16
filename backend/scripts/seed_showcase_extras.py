@@ -71,7 +71,7 @@ from app.core.security import CurrentUser  # noqa: E402
 from app.models.accounts import Account, PaymentRequest, SalesInvoice  # noqa: E402
 from app.models.accounts.share import ShareTransfer, ShareType, Shareholder  # noqa: E402
 from app.models.accounts.subscription import Subscription, SubscriptionPlan  # noqa: E402
-from app.models.buying import RequestForQuotation, Supplier, SupplierQuotation  # noqa: E402
+from app.models.buying import RequestForQuotation, Supplier  # noqa: E402
 from app.models.core import Company, User  # noqa: E402
 from app.models.manufacturing import (  # noqa: E402
     BOM,
