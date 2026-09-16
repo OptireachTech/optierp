@@ -12,7 +12,7 @@ Phase 0). This migration:
      tables (``GAP_TABLES``), exactly matching the policy every other scoped
      table already carries (see e.g. migration 0001_core_setup).
   2. Adds ``FORCE ROW LEVEL SECURITY`` to *every* scoped table — the 22 above
-     plus the 133 that already had ``ENABLE`` but never ``FORCE``
+     plus the 129 that already had ``ENABLE`` but never ``FORCE``
      (``ALREADY_ENABLED_TABLES``). Without FORCE, RLS does not apply to a
      table's owner; ``erp_owner`` (the Alembic/migration role — see
      ``infra/init-db.sql``) is exactly that owner, so a stray ad-hoc query run
@@ -33,6 +33,17 @@ policy that already exists is a hard Postgres error
 this ran in CI. ``tests/unit/test_rls_coverage.py`` now recognises all three
 idioms (literal, loop, and local helper) so this class of false positive
 fails fast in the guard test instead of at migration time again.
+
+Second correction: fixing the above surfaced a different false positive —
+``tax_adjustment_provisions``, ``tax_adjustment_rule_packs``,
+``tax_adjustment_rules`` and ``tax_depreciation_blocks`` were granted RLS via
+``_rls()`` in ``0084_tax_adjustment_engine.py``, then dropped outright by
+``0092_drop_legacy_itr.py`` — so ``FORCE ROW LEVEL SECURITY`` on them fails
+with ``UndefinedTableError``, a table that no longer exists. The scan
+accumulates every mention across all of migration history with no notion of
+"then it was deleted". ``_scan_migrations()`` now intersects its result
+against ``Base.metadata.tables`` (the ORM's live table set) before returning,
+so a dropped table can never reappear as "already covered" again.
 
 Operational note for future migrations: FORCE RLS means any ``op.execute``
 that INSERTs/UPDATEs a scoped table's rows from *this point forward* runs as
@@ -89,13 +100,12 @@ ALREADY_ENABLED_TABLES: tuple[str, ...] = (
     "secretarial_share_certificates", "secretarial_share_transfer_details", "secretarial_status_history",
     "serial_nos", "service_credits", "shipping_rules", "stock_entries", "stock_ledger_entries",
     "stock_reconciliations", "supplier_groups", "supplier_quotations", "suppliers", "tax_26as_recon_runs",
-    "tax_adjustment_provisions", "tax_adjustment_rule_packs", "tax_adjustment_rules", "tax_categories",
-    "tax_challans", "tax_compliance_reminders", "tax_computation_adjustment_lines",
+    "tax_categories", "tax_challans", "tax_compliance_reminders", "tax_computation_adjustment_lines",
     "tax_computation_income_lines", "tax_computation_results", "tax_computation_runs", "tax_computations",
-    "tax_credit_entries", "tax_depreciation_blocks", "tax_depreciation_movements",
-    "tax_depreciation_registers", "tax_filings", "tax_loss_carry_forward_ledger",
-    "tax_loss_setoff_entries", "tax_policy_overrides", "tax_regime_elections", "tax_registrations",
-    "tax_templates", "terms_templates", "territories", "utm_sources", "warehouses", "workstations",
+    "tax_credit_entries", "tax_depreciation_movements", "tax_depreciation_registers", "tax_filings",
+    "tax_loss_carry_forward_ledger", "tax_loss_setoff_entries", "tax_policy_overrides",
+    "tax_regime_elections", "tax_registrations", "tax_templates", "terms_templates", "territories",
+    "utm_sources", "warehouses", "workstations",
 )
 
 # Tables using CompanyScopedMixin that never got a company_isolation policy at all.

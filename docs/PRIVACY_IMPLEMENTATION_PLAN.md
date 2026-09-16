@@ -87,6 +87,16 @@ real gap: 22 tables, not 47. `0103_rls_coverage.py` was rewritten with the corre
 its own docstring for the full account. This is exactly the failure mode CI exists to catch before
 merge, not after a manual review; it did.
 
+**Second correction, same CI run:** the fix above hit a *different* failure on the next run —
+`UndefinedTableError: relation "tax_adjustment_provisions" does not exist`. Four tables had been
+RLS'd via `_rls()` in migration `0084_tax_adjustment_engine.py` and later dropped outright by
+`0092_drop_legacy_itr.py` (a clean-break tax-module rewrite); the scan accumulates every mention
+across all of migration history with no notion of "then it was deleted", so it kept treating them
+as covered and the migration tried to `FORCE ROW LEVEL SECURITY` on tables Postgres no longer had.
+Fix: `_scan_migrations()` now intersects its result against `Base.metadata.tables` — the ORM's
+live table set — before returning, so a dropped table can never reappear as "already covered".
+The real already-covered count dropped from 133 to 129; the 22-table gap itself was unaffected.
+
 **Known limitation carried forward, not fixed here:** the integration test fixture builds its schema
 via `Base.metadata.create_all`, which doesn't run Alembic's `CREATE POLICY` SQL — so RLS enforcement
 itself still has no live-database test proving a second tenant is actually blocked. `test_rls_coverage.py`

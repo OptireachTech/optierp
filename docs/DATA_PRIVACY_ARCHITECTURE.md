@@ -64,6 +64,14 @@ with that idiom added found the true count: 22, not 47. `test_rls_coverage.py` n
 three call shapes, so this exact class of false positive fails the guard test before a migration
 is even written, rather than surfacing as a runtime `DuplicateObjectError` in CI.
 
+**Second correction, same CI run:** fixing the above hit a different failure —
+`UndefinedTableError: relation "tax_adjustment_provisions" does not exist`. Four tables had been
+granted RLS via `_rls()` in an early migration and then dropped outright by a later one
+(`0092_drop_legacy_itr.py`, a clean-break rewrite of the tax module); the scan had no concept of
+"then it was deleted" and kept counting them as covered. `_scan_migrations()` now intersects its
+result against `Base.metadata.tables` — the ORM's live table set — before returning, so a dropped
+table can never again be treated as still carrying a policy.
+
 Known residual gap (not closed by this migration): the integration test suite builds its schema
 via `Base.metadata.create_all` (`tests/integration/conftest.py`), which does not run Alembic's raw
 `CREATE POLICY` SQL — so no integration test today actually exercises RLS enforcement end-to-end
@@ -282,7 +290,7 @@ the application filter. (Closed — see §2.)
 
 | File / model | Change |
 |---|---|
-| `migrations/versions/0103_rls_coverage.py`, `0104_refresh_tokens.py` | ✅ shipped (Phase 0) — `company_isolation` policy + `FORCE ROW LEVEL SECURITY` on the 22 gap tables; `FORCE` added to the 133 tables that already had a policy (126 `CompanyScopedMixin`, plus 7 non-tenant-scoped tables — `secretarial_engagements` and six reference tables — that already carried their own); new `refresh_tokens` table |
+| `migrations/versions/0103_rls_coverage.py`, `0104_refresh_tokens.py` | ✅ shipped (Phase 0) — `company_isolation` policy + `FORCE ROW LEVEL SECURITY` on the 22 gap tables; `FORCE` added to the 129 tables that already had a policy (126 `CompanyScopedMixin`, plus 3 non-tenant-scoped tables — `secretarial_engagements` and two reference tables — that already carried their own); new `refresh_tokens` table |
 | `app/registry/base.py` — `FieldSpec` | add `sensitivity: str` (no default — see implementation plan §3) |
 | `app/models/core.py` — `RolePermission` | add `can_read_pii`, `can_read_restricted` booleans |
 | `app/services/audit.py` | add `redact_for_audit()` beside `serialize_document()`; add `log_read()` for Tier-3 access |

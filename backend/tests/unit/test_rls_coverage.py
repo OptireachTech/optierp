@@ -165,7 +165,20 @@ def _scan_migrations() -> tuple[set[str], set[str]]:
                 for kind in helpers[node.func.id]:
                     (enabled if kind == "ENABLE" else forced).add(table)
 
-    return _canonicalise(enabled), _canonicalise(forced)
+    enabled, forced = _canonicalise(enabled), _canonicalise(forced)
+
+    # A table can be granted RLS in one migration and dropped in a later one
+    # (e.g. 0084_tax_adjustment_engine's tables, dropped by
+    # 0092_drop_legacy_itr) — the scan above sees every mention across all of
+    # history and has no notion of "then it was deleted". Filter against the
+    # ORM's current table set (after canonicalising renames, or a renamed
+    # table's old name would get filtered out here instead of mapped) — the
+    # only reliable source of "still exists". Otherwise a migration written
+    # from this scanner's output can try to FORCE ROW LEVEL SECURITY on a
+    # table Postgres no longer has, exactly what happened with migration
+    # 0103's first fix — see its commit history.
+    existing_tables = set(Base.metadata.tables.keys())
+    return enabled & existing_tables, forced & existing_tables
 
 
 def test_scanner_finds_known_coverage():
