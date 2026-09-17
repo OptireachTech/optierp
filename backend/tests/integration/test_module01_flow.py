@@ -26,15 +26,17 @@ async def client():
     from app.core.database import async_session_factory, engine
     from app.core.security import hash_password
     from app.main import app
-    from app.models.base import Base
     from app.models.core import Currency, Role, User, UserRole
 
+    from tests.integration.conftest import ensure_schema
+
+    # Shared with the `ctx` fixture in conftest.py: builds the schema once
+    # per session and TRUNCATEs on later calls, rather than this file
+    # independently dropping/recreating `public` on every test — see
+    # docs/CI_TEST_PERFORMANCE_PLAN.md Phase 1 and ensure_schema's docstring
+    # for why these two fixtures can't each do their own thing here.
     async with engine.begin() as conn:
-        # schema-level drop: drop_all can't order DROPs across FK cycles
-        await conn.execute(text("DROP SCHEMA public CASCADE"))
-        await conn.execute(text("CREATE SCHEMA public"))
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS ltree"))
-        await conn.run_sync(Base.metadata.create_all)
+        await ensure_schema(conn)
 
     async with async_session_factory() as db:
         db.add(Currency(code="USD", currency_name="US Dollar", symbol="$"))

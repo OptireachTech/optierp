@@ -5,7 +5,9 @@ Token model (Section 4.1):
   * refresh token — 7 days, stored in an httpOnly cookie
 
 JWT payload: {"sub": user_uuid, "email": ..., "company_id": active company,
-"roles": [...], "type": "access"|"refresh", "exp": ...}
+"roles": [...], "type": "access"|"refresh", "exp": ...}. Refresh tokens
+additionally carry a "jti", checked against the ``refresh_tokens`` table
+(``app/services/auth_sessions.py``) on every use — see Privacy Phase 0.
 """
 
 import uuid
@@ -69,11 +71,18 @@ def create_access_token(
     )
 
 
-def create_refresh_token(user_id: uuid.UUID) -> str:
+def create_refresh_token(user_id: uuid.UUID, jti: uuid.UUID | None = None) -> tuple[str, uuid.UUID]:
+    """Returns (token, jti) — the caller persists the jti in ``refresh_tokens`` so it
+    can later be revoked (logout) or checked for reuse (rotation) without trusting
+    the JWT payload alone."""
     settings = get_settings()
-    return _create_token(
-        {"sub": str(user_id)}, timedelta(days=settings.refresh_token_expire_days), "refresh"
+    jti = jti or uuid.uuid4()
+    token = _create_token(
+        {"sub": str(user_id), "jti": str(jti)},
+        timedelta(days=settings.refresh_token_expire_days),
+        "refresh",
     )
+    return token, jti
 
 
 def decode_token(token: str, expected_type: str) -> dict[str, Any]:

@@ -51,6 +51,11 @@ class AuthenticationError(AppError):
     code = "ERR_AUTHENTICATION"
 
 
+class RateLimitedError(AppError):
+    status_code = 429
+    code = "ERR_RATE_LIMITED"
+
+
 class DocstatusError(AppError):
     """Raised on illegal docstatus transitions (e.g. editing a submitted doc)."""
 

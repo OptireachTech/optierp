@@ -1,0 +1,142 @@
+name: CI
+
+# Foundation for docs/PRIVACY_IMPLEMENTATION_PLAN.md: every guard test in that
+# plan (RLS coverage, sensitivity coverage, audit redaction, AI call sites, ...)
+# only enforces anything if something runs it on every PR and blocks the
+# merge on failure. This is that something.
+#
+# Two jobs (docs/CI_TEST_PERFORMANCE_PLAN.md Phase 3): unit-tests needs no
+# services and fails in the time it takes to `pip install`, so a broken unit
+# test or a lint error doesn't wait behind a Postgres/Redis service-container
+# boot to report. integration-tests provisions Postgres + Redis and runs the
+# ~254 integration tests that self-skip without a real database (see
+# backend/tests/conftest.py) — skipping them silently would mean CI reports
+# green while covering a fraction of the suite. Both are required for merge.
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # WeasyPrint (PDF printing, Section 4.5) needs these native libs at
+      # import time — several modules import it at module load, so even
+      # collecting the test suite fails without them.
+      - name: Install native dependencies (WeasyPrint)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf2.0-0
+
+      - name: Install Python dependencies
+        working-directory: backend
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        working-directory: backend
+        run: ruff check .
+
+      - name: Test (pytest — unit only, no DB)
+        working-directory: backend
+        env:
+          SECRET_KEY: ci-secret-key-not-for-production-0123456789
+        run: pytest tests/unit
+
+  integration-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      SECRET_KEY: ci-secret-key-not-for-production-0123456789
+      DATABASE_URL: postgresql+asyncpg://erp_owner:erp_owner_pw@localhost:5432/erp_test
+      TEST_DATABASE_URL: postgresql+asyncpg://erp_owner:erp_owner_pw@localhost:5432/erp_test
+      MIGRATIONS_DATABASE_URL: postgresql+asyncpg://erp_owner:erp_owner_pw@localhost:5432/erp
+      REDIS_URL: redis://localhost:6379/0
+      REFRESH_COOKIE_SECURE: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install native dependencies (WeasyPrint)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf2.0-0
+
+      - name: Install Python dependencies
+        working-directory: backend
+        run: pip install -e ".[dev]"
+
+      - name: Bootstrap database roles
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE erp_owner LOGIN PASSWORD 'erp_owner_pw';
+          CREATE ROLE erp_app LOGIN PASSWORD 'erp_app_pw';
+          CREATE DATABASE erp OWNER erp_owner;
+          CREATE DATABASE erp_test OWNER erp_owner;
+          SQL
+          PGPASSWORD=postgres psql -h localhost -U postgres -d erp -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER SCHEMA public OWNER TO erp_owner;
+          GRANT USAGE ON SCHEMA public TO erp_app;
+          CREATE EXTENSION IF NOT EXISTS ltree;
+          SQL
+          PGPASSWORD=postgres psql -h localhost -U postgres -d erp_test -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER SCHEMA public OWNER TO erp_owner;
+          GRANT USAGE ON SCHEMA public TO erp_app;
+          CREATE EXTENSION IF NOT EXISTS ltree;
+          SQL
+
+      # Validates the migration chain applies cleanly (catches a broken
+      # migration like a typo'd table name in an RLS policy). Runs against
+      # `erp` via MIGRATIONS_DATABASE_URL — a separate database from the
+      # `erp_test` the test suite below provisions itself via create_all
+      # (see tests/integration/conftest.py), so the two steps can't collide.
+      - name: Apply Alembic migrations
+        working-directory: backend
+        run: alembic upgrade head
+
+      # NOT -n auto yet: docs/CI_TEST_PERFORMANCE_PLAN.md Phase 2 (parallelization) is
+      # implemented but failed live verification — real bugs found under actual
+      # multi-worker xdist runs, not yet resolved. See that doc's Phase 2 section
+      # before re-enabling -n auto here; shipping it unverified would trade a slow
+      # green CI for a fast red one.
+      - name: Test (pytest — integration)
+        working-directory: backend
+        run: pytest tests/integration

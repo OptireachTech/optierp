@@ -36,10 +36,25 @@ class Settings(BaseSettings):
         default=None, description="Owner-role DSN for Alembic; defaults to database_url."
     )
     db_echo: bool = False
+    # Test-only (docs/CI_TEST_PERFORMANCE_PLAN.md Phase 2): when set, every connection from
+    # `engine` gets this as its Postgres `search_path`, so a pytest-xdist worker's unqualified
+    # tables (everything except the read-only `statutory` catalogue) land in its own schema
+    # instead of the shared `public` one two workers would otherwise stomp on concurrently.
+    # Never set outside tests — see tests/conftest.py.
+    db_search_path: str | None = None
 
     # --- Redis (websocket pub/sub, rate limiting) ---
     # MANUAL_REVIEW: Redis assumed available for realtime + rate limiting.
     redis_url: str = "redis://localhost:6379/0"
+
+    # --- Rate limiting (Privacy Phase 0 — credential-testing surface) ---
+    # Applied to /auth/login and /auth/refresh, keyed by client IP. Fails open
+    # (logs a warning, lets the request through) if Redis is unreachable —
+    # availability over strict enforcement, matching this app's existing
+    # posture toward Redis (see app/core/websocket.py).
+    auth_rate_limit_enabled: bool = True
+    auth_rate_limit_attempts: int = 10
+    auth_rate_limit_window_seconds: int = 60
 
     # --- CORS ---
     allowed_origins: str = "http://localhost:5173"

@@ -33,8 +33,17 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    "pytest-xdist>=3.6",
     "httpx>=0.28",
-    "ruff>=0.8",
+    # Pinned, not floored: Ruff 0.16 expanded its default rule set from 59 to
+    # 413 rules (astral-sh/ruff#27199) — an unpinned floor here would let a
+    # fresh `pip install` silently start enforcing hundreds of rules this
+    # codebase was never written against, exactly what broke CI. The
+    # explicit `select` below makes that specific risk moot going forward,
+    # but the version stays pinned too, so a future Ruff release can't
+    # change *other* default behaviour out from under CI without a
+    # deliberate version bump.
+    "ruff==0.15.22",
 ]
 # Kept as an alias for compatibility; WeasyPrint now ships in the default deps above.
 pdf = ["weasyprint>=63"]
@@ -46,6 +55,14 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 110
 target-version = "py312"
+
+[tool.ruff.lint]
+# Explicit, not inherited: this is Ruff's own pre-0.16 default (pyflakes +
+# a narrow pycodestyle slice) and the rule set this codebase has actually
+# been maintained against. Pinning it here means CI enforces the same
+# thing regardless of which Ruff version installs it — see the version
+# pin's comment in pyproject.toml's [project.optional-dependencies].dev.
+select = ["E4", "E7", "E9", "F"]
 
 [build-system]
 requires = ["setuptools>=69"]

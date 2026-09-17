@@ -15,7 +15,7 @@ import argparse
 import asyncio
 import os
 import sys
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
