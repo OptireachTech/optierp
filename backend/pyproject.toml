@@ -33,6 +33,7 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    "pytest-xdist>=3.6",
     "httpx>=0.28",
     # Pinned, not floored: Ruff 0.16 expanded its default rule set from 59 to
     # 413 rules (astral-sh/ruff#27199) — an unpinned floor here would let a

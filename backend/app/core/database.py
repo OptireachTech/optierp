@@ -22,10 +22,24 @@ from app.core.config import get_settings
 
 _settings = get_settings()
 
+# See Settings.db_search_path — test-only, routes this process's connections at a
+# pytest-xdist worker's own schema (docs/CI_TEST_PERFORMANCE_PLAN.md Phase 2). "public"
+# stays a fallback, not just the worker's own schema: an extension like ltree installs
+# its types/functions into whichever schema existed first across every worker/test run
+# in this database, and IF NOT EXISTS makes re-creating it into a worker's own schema a
+# no-op once it exists anywhere — so an unqualified reference to its type only resolves
+# if "public" is still reachable via search_path.
+_connect_args = (
+    {"server_settings": {"search_path": f"{_settings.db_search_path},public"}}
+    if _settings.db_search_path
+    else {}
+)
+
 engine = create_async_engine(
     _settings.database_url,
     echo=_settings.db_echo,
     pool_pre_ping=True,
+    connect_args=_connect_args,
 )
 
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)

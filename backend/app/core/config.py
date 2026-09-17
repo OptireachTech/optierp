@@ -36,6 +36,12 @@ class Settings(BaseSettings):
         default=None, description="Owner-role DSN for Alembic; defaults to database_url."
     )
     db_echo: bool = False
+    # Test-only (docs/CI_TEST_PERFORMANCE_PLAN.md Phase 2): when set, every connection from
+    # `engine` gets this as its Postgres `search_path`, so a pytest-xdist worker's unqualified
+    # tables (everything except the read-only `statutory` catalogue) land in its own schema
+    # instead of the shared `public` one two workers would otherwise stomp on concurrently.
+    # Never set outside tests — see tests/conftest.py.
+    db_search_path: str | None = None
 
     # --- Redis (websocket pub/sub, rate limiting) ---
     # MANUAL_REVIEW: Redis assumed available for realtime + rate limiting.
